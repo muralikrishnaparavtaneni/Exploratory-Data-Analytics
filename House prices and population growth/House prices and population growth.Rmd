@@ -1,0 +1,342 @@
+---
+title: "Mini Project"
+output: html_notebook
+author: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(knitr)
+library(MASS)
+library(mgcv)
+library(data.table)
+```
+
+# Load and prepare the data
+```{r}
+# Load the average house prices data
+avg_house_price = read_excel("./State_and_US_SA.xls", skip = 5) # Remove top 5 rows are they are not required
+avg_house_price = head(avg_house_price, -16) # Remove last 16 rows as they are not required
+avg_house_price = avg_house_price[, 1:52] # Remove the last column as it is not required
+# Load the state code data
+statecode = read.table("./statecodes.txt", header = FALSE, sep = "", dec = ".")
+# Load the state abbreviates data
+st_abbrs = read.table("state_abbrevs.txt", header = TRUE, sep = "", dec = ".")
+# Load the population data
+population_df = read.csv("population.csv")
+# Load the CPI data
+cpi.data = read.csv("cpi.csv")
+```
+
+# 1) House prices over time
+
+### Transform the average house price data
+```{r}
+avg_house_price$AK =as.numeric(avg_house_price$AK)
+avg_house_price = avg_house_price %>% 
+  pivot_longer(!Month, names_to = "Code",
+               values_to = "AvgPrice",
+               values_drop_na = TRUE)
+
+avg_house_price = na.omit(avg_house_price)
+avg_house_price = avg_house_price %>% separate( Month, into = c("Year", "Month"), sep = "M", convert = TRUE)
+```
+
+### Combine the average house price data with the state abbreviatives to assign region to each state
+```{r}
+avg_house_price = merge(x = avg_house_price, y = st_abbrs, by = "Code", all.x = TRUE)
+```
+
+### Combine the CPI data with Average House Price data to CPI adjust the average prices of the houses
+```{r}
+# Remove character 'M' from the 'Period' column
+cpi.data$Period = sapply(cpi.data$Period, function(x) gsub("M", "", x))
+# Convert the 'Period' column to numeric values
+cpi.data$Period = as.numeric(cpi.data$Period)
+# Change the name of 'Period' column to 'Month' in CPI data to perform inner_join() operation with the combined data
+names(cpi.data)[names(cpi.data) == "Period"] = "Month"
+# Perform inner join based on 'Year' and 'Month'
+avg_house_price = inner_join(avg_house_price, cpi.data, by = c("Year", "Month"))
+# Perform transform() operation on the average price 
+avg_house_price$AvgPrice = (avg_house_price$AvgPrice / avg_house_price$Value)* 100
+```
+
+### Plot of change in average housing price in US per year (CPI adjusted)
+```{r fig.height=6, fig.width=12}
+avg_house_price.avgPriceUS = aggregate(AvgPrice ~ Year, FUN = mean, data = avg_house_price)
+ggplot(avg_house_price.avgPriceUS, aes(x = Year, y = AvgPrice)) +
+  geom_line() + geom_point()+
+  #geom_smooth(method="gam", formula = y~s(x), se = FALSE) +
+  ggtitle("Average Housing Price In US Per Year") +
+  ylab("Average Housing Price ($)") + 
+  theme_grey(base_size = 22)
+```
+The above image shows average house price in US from 1975 to 2018.
+
+### Plot of average housing price by state per year
+```{r fig.height=12, fig.width=20}
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+avg_house_price.avgPriceState = aggregate(AvgPrice ~ Year + State + Region, FUN = mean, data = avg_house_price)
+ggplot(avg_house_price.avgPriceState, aes(x = Year, y = AvgPrice, color = Region)) +
+  geom_line() + geom_point() +
+  facet_wrap(~ State, ncol = 7, labeller = "label_both") + 
+  #geom_smooth(method="gam", formula = y ~ s(x), se = FALSE) +
+  ggtitle("Average Housing Price For Each State Per Year") +
+  xlab("Year") +
+  ylab("Average Housing Price ($)") +
+  scale_color_manual(values = cb_palette) +
+  theme_grey(base_size = 22)
+```
+
+### Faceting by region
+
+```{r fig.height=12, fig.width=20}
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73",
+               "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+avg_house_price.avgPriceState = aggregate(AvgPrice ~ Year + State + Region, FUN = mean, data = avg_house_price)
+ggplot(avg_house_price.avgPriceState, aes(x = Year, y = AvgPrice, group = State, color = State)) +
+  geom_line() + geom_point() +
+  facet_wrap(~ Region, ncol = 2, labeller = "label_both") + 
+  #geom_smooth(method="gam", formula = y ~ s(x), se = FALSE) +
+  ggtitle("Average Housing Price For Each State Per Year") +
+  xlab("Year") +
+  ylab("Average Housing Price ($)") +
+  theme_grey(base_size = 22)
+```
+
+
+```{r fig.height= 5, fig.width=12}
+avg_house_price.avgPriceRegion = aggregate(AvgPrice ~ Year + Region, FUN = mean, data = avg_house_price)
+ggplot(avg_house_price.avgPriceRegion, aes(x = Year, y = AvgPrice, color = Region)) +
+  geom_line() + geom_point() + facet_wrap(~ Region, ncol = 2, labeller = "label_both") + 
+  #geom_smooth(method = "gam", formula = y ~ s(x), se = FALSE) +
+  xlab("Year") + ylab("Average Housing Price ($)") + 
+  ggtitle("Average Housing Price For Each Region Per Year") + 
+  scale_color_manual(values = cb_palette) + 
+  theme_grey(base_size = 22)
+```
+# 2) Population density and changes in house prices:
+Using state area from 'US State Facts and Figures' data set available in R
+Since area of the Distinct of Columbia is not available there, we used the area value available at http://www.usa.com/district-of-columbia-county-dc.htm
+
+```{r}
+# Create a data frame to get the area of the states
+state.area = data.frame(state.name, state.x77)
+# Retain only relevant state name and their areas
+state.area = cbind(state.area$state.name, state.area$Area)
+# Rename the column names of the data frame
+colnames(state.area) = c('State', 'Area')
+# Add the missing area for D.C.
+state.area = rbind(state.area, c("District of Columbia", 61.05))
+# view(state_area)
+```
+
+### Prepare the data
+```{r, install = True}
+library("tidycensus")
+census_api_key("25d0781306ff3e0c9830b6d63db792736216e17d")
+# Copy the populations only for 1990, 2000, 2010
+census.data = data.frame(population_df$NHGIS.Integrated.State.Name, population_df$X1990..Persons..Total, population_df$X2000..Persons..Total, population_df$X2010..Persons..Total)
+# Rename the column names of the data frame
+colnames(census.data) = c('State', 'pop_1990', 'pop_2000', 'pop_2010')
+# Download 2018 population data
+population_2018 = get_acs(geography = "state", 
+                       variables = "B01003_001", 
+                       year = 2018)
+# Copy the downloaded data to the data frame
+census.data$pop_2018 = population_2018$estimate
+# Merge the area data with the census data
+census.data = merge(x = census.data, y = state.area, by = "State", all.x = TRUE)
+# Remove 'Puerto Rico' as data is missing for 1990 and 2000
+census.data = na.omit(census.data)
+# Pivot the data longer
+census.data = census.data %>% 
+  pivot_longer(cols = starts_with("pop_"),
+               names_to = "Year",
+               names_prefix = "pop_",
+               values_to = "Population",
+               values_drop_na = TRUE)
+# Calculate the density for each year of each state
+census.data$density = as.numeric(census.data$Population)/as.numeric(census.data$Area)
+```
+
+```{r}
+# Filter 2018 census data
+census.data2018 = filter(census.data, Year == 2018)
+# Filter 1975 average house price data
+Y_1975 = filter(avg_house_price, Year == 1975)
+Y_1975 = Y_1975[c("Code", "State", "AvgPrice")]
+Y_1975 = aggregate(Y_1975$AvgPrice, list(Y_1975$Code), FUN=mean)
+colnames(Y_1975) = c("Code", "AvgPrice1975")
+# Filter 2018 average house price data
+Y_2018 = filter(avg_house_price, Year == 2018)
+Y_2018 = Y_2018[c("Code","State", "AvgPrice")]
+Y_2018 = aggregate(Y_2018$AvgPrice, list(Y_2018$Code, Y_2018$State), FUN=mean)
+colnames(Y_2018) = c("Code","State", "AvgPrice2018")
+# Calculate the percentage change of average price between 1975 and 2018
+priceChange = merge(x = Y_1975, y = Y_2018, by = "Code", all.x = TRUE)
+priceChange$change = ((priceChange$AvgPrice2018 - priceChange$AvgPrice1975)/ priceChange$AvgPrice1975) * 100.1
+# Merge the population density
+priceChange = merge(x = priceChange, y = census.data2018, by = "State", all.x = TRUE)
+```
+
+```{r fig.height=10, fig.width=14}
+ggplot(data = priceChange, aes(x= log(density), y = change)) + 
+  geom_point() + 
+  geom_smooth(method = "rlm", se = FALSE, aes(colour="rlm")) + 
+  geom_smooth(method = 'lm', se = FALSE, aes(colour="lm")) + 
+  geom_text(aes(label = Code), size = 5) + 
+  xlab("Density (Population per unit Area)") + 
+  ylab("Percent change in the house price ($ percent)") + 
+  ggtitle("Percent Density vs Percent change in the house price ") + 
+  scale_colour_manual(name="legend", values=c("blue", "orange")) + 
+  theme_grey(base_size = 22)
+```
+## DROP OUTLIERS
+
+```{r fig.height=10, fig.width=14}
+filterpriceChange = filter(priceChange, Code != "DC")
+#filterpriceChange = filter(filterpriceChange, Code != "CA")
+ggplot(data = filterpriceChange, aes(x= log(density), y = change)) + 
+  geom_point() + 
+  scale_color_manual(values = cb_palette) + 
+  geom_smooth(method = "rlm", se = FALSE, aes(colour="rlm")) + 
+  geom_smooth(method = 'lm', se = FALSE, aes(colour="lm")) + 
+  geom_text(aes(label = Code), size=5) + 
+  xlab("Density (Population per unit Area)") + 
+  ylab("Percent change in the house price (percent $)") + 
+  ggtitle("Percent Density vs Percent change in the house price ") +
+  scale_colour_manual(name="legend", values=c("blue", "orange")) + 
+  theme_grey(base_size = 22)
+```
+
+## Change in House Prices vs Population Density per region
+
+```{r}
+# Add region data
+priceChange.regionData = merge(x = priceChange, y = st_abbrs, by = "State", all.x = TRUE)
+```
+
+
+```{r fig.height = 10, fig.width = 15}
+ggplot(data = priceChange.regionData, aes(x= log(density), y = change, color = Region)) + 
+  geom_point() + geom_smooth(method = "lm", se = FALSE) + facet_wrap(~Region) + 
+  xlab("Density (Population per unit Area)") +ylab("Percent change in the house price ($ percent)") + 
+  ggtitle("Percent Density vs Percent change in the house price ") + 
+  scale_color_manual(values = cb_palette) + theme_grey(base_size = 22)
+```
+
+# 3) Changes in population and changes in house prices:
+```{r}
+# Change the data to wide form
+census.data.wide = census.data %>% pivot_wider(
+  names_from = Year, values_from = c("Population", "density")
+)
+
+# Evaluate the change in population
+census.data.change = data.frame(
+  State = census.data.wide$State,
+  '1990_2000' = census.data.wide$Population_2000 - census.data.wide$Population_1990, 
+  '2000_2010' = census.data.wide$Population_2010 - census.data.wide$Population_2000, 
+  '2010_2018' = census.data.wide$Population_2018 - census.data.wide$Population_2010
+)
+
+census.data.change = census.data.change %>% pivot_longer(
+  !State, names_to = "Year", values_to = "Population_Change"
+)
+
+# Remove 'X' character from the start of Year column
+census.data.change$Year = sapply(census.data.change$Year, function(x) gsub("X", "", x))
+census.data.change$Year = as.factor(census.data.change$Year)
+
+# Evaluate the change in average house prices
+avgPrices1990 = filter(avg_house_price, Year == 1990)
+avgPrices1990 = setDT(avgPrices1990)[, .(AvgPrice = mean(AvgPrice, na.rm = TRUE),
+              Value = mean(Value,na.rm = TRUE)), 
+          by = .(Code, State, Region)
+          ]
+avgPrices1999 = filter(avg_house_price, Year == 1999)
+avgPrices1999 = setDT(avgPrices1999)[, .(AvgPrice = mean(AvgPrice, na.rm = TRUE),
+              Value = mean(Value,na.rm = TRUE)), 
+          by = .(Code, State, Region)
+          ]
+avgPrices2000 = filter(avg_house_price, Year == 2000)
+avgPrices2000 = setDT(avgPrices2000)[, .(AvgPrice = mean(AvgPrice, na.rm = TRUE),
+              Value = mean(Value,na.rm = TRUE)), 
+          by = .(Code, State, Region)
+          ]
+avgPrices2009 = filter(avg_house_price, Year == 2009)
+avgPrices2009 = setDT(avgPrices2009)[, .(AvgPrice = mean(AvgPrice, na.rm = TRUE),
+              Value = mean(Value,na.rm = TRUE)), 
+          by = .(Code, State, Region)
+          ]
+avgPrices2010 = filter(avg_house_price, Year == 2010)
+avgPrices2010 = setDT(avgPrices2010)[, .(AvgPrice = mean(AvgPrice, na.rm = TRUE),
+              Value = mean(Value,na.rm = TRUE)), 
+          by = .(Code, State, Region)
+          ]
+avgPrices2018 = filter(avg_house_price, Year == 2018)
+avgPrices2018 = setDT(avgPrices2018)[, .(AvgPrice = mean(AvgPrice, na.rm = TRUE),
+              Value = mean(Value,na.rm = TRUE)), 
+          by = .(Code, State, Region)
+          ]
+
+avg_house_prices.change = data.frame(
+  State = census.data.wide$State,
+  '1990_2000' = avgPrices1999$AvgPrice - avgPrices1990$AvgPrice,
+  '2000_2010' = avgPrices2009$AvgPrice - avgPrices2000$AvgPrice, 
+  '2010_2018' = avgPrices2018$AvgPrice - avgPrices2010$AvgPrice
+)
+
+avg_house_prices.change = avg_house_prices.change %>% pivot_longer(
+  !State, names_to = "Year", values_to = "Average_Price_Change"
+)
+
+# Remove 'X' character from the start of Year column
+avg_house_prices.change$Year = sapply(avg_house_prices.change$Year, function(x) gsub("X", "", x))
+avg_house_prices.change$Year = as.factor(avg_house_prices.change$Year)
+
+data.change = merge(x = census.data.change, y = avg_house_prices.change, by = c("State", "Year"), x.all = TRUE)
+```
+
+Plot the data
+
+```{r fig.height= 10, fig.width = 15}
+# Create subplot with 3 columns in a single row
+ggplot(data.change, aes(x = log(abs(Population_Change)), y = Average_Price_Change, group = Year, color = factor(Year))) +
+  geom_point() +
+  geom_smooth(method = "lm",se = FALSE) +
+  ggtitle("Population Change Vs. Housing Price Change") +
+  xlab("Population Change") +
+  ylab("Housing Price Change ($)") +
+  scale_color_manual(values = cb_palette) +
+  facet_wrap(Year ~ ., labeller = "label_both") +
+  labs(color = "Year") + 
+  theme_grey(base_size = 22)
+```
+```{r}
+data.change = merge(x= data.change, y= st_abbrs, by = "State", x.all = TRUE)
+```
+
+
+```{r fig.height=7, fig.width = 10}
+ggplot(data.change, aes(x = log(abs(Population_Change)), y = Average_Price_Change, group = Year, color = factor(Year))) +
+  geom_point() +
+  geom_smooth(method = "lm",se = FALSE) +
+  ggtitle("Population Change Vs. Housing Price Change") +
+  xlab("Population Change") +
+  ylab("Housing Price Change ($)") +
+  scale_color_manual(values = cb_palette) +
+  facet_wrap(Region ~ ., labeller = "label_both") + 
+  labs(color = "Year") + 
+  theme_grey(base_size = 22)
+```
+
+
+
+
+
