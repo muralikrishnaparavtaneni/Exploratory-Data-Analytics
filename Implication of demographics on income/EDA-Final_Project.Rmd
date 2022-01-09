@@ -1,0 +1,837 @@
+---
+title: "Implications of demographics on income"
+author: "Sai Ajay Vutukuri, Himani Anil Deshpande, Murali Krishna Parvataneni, Tushar Kant Samantaray"
+date: "12/8/2021"
+output: 
+  html_document: default
+  pdf_document: default
+---
+
+# 0. Load and Preprocess the data
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(comment = NA, echo = FALSE, warning = FALSE, message = FALSE)
+library(tidytuesdayR)
+library(tidyverse)
+library(readxl)
+library(spatstat)
+library(foreign)
+cbPalette = c("#000000", "#E69F00", "#0072B2", "#009E73","#CC79A7","#762a83","#8c510a",
+                "#56B4E9", "#D55E00", "#F0E442")
+```
+
+```{r}
+theme_g = theme(
+  panel.grid.major = element_line(color = "lightgrey"), panel.grid.minor = element_line(color = "lightgrey"),
+  panel.background = element_rect(fill = 'white', color = 'black'),
+  strip.text = element_text(size = 12, face = "bold"),
+        axis.title.x = element_text(size = 20, face = "bold"),
+        axis.title.y = element_text(size = 20, face = "bold"),
+legend.title = element_text(size = 14, face = "bold"),
+  legend.text = element_text(size = 12, face = "bold"),
+        plot.title = element_text(color="black", size=20, face="bold",hjust = 0.5),
+        axis.text.y =element_text(size=11, face = "bold"),
+axis.text.x =element_text(size=11, face = "bold"))
+```
+
+## Read the data
+
+The data is imported from IPUMS - Source: https://cps.ipums.org/cps/index.shtml
+Finally extracted columns data - Access: https://drive.google.com/file/d/1R5_A_vr47x8Nw55-c7YbrAy3IJO-qolK/view
+```{r}
+dataset <- read.spss("cps_00005.sav", to.data.frame=TRUE)
+dataset = filter(dataset, YEAR != 2021)
+```
+
+## Filtering out the missing data
+```{r}
+employee_data = dataset %>% 
+  filter(HISPAN != 'Do not know' & HISPAN != 'N/A') %>%
+  filter(EDUC != 'NIU or blank' & EDUC != 'Missing/Unknown') %>%
+  filter(LABFORCE != 'NIU') %>%
+  filter(IND != 0) %>%
+  filter(RACE != 'Blank')
+```
+
+## Segmenting the industies into 14 categories based on their industry ID's.
+```{r}
+employee_data = employee_data %>% 
+  mutate(MAJOR_IND = case_when(
+    (IND >= 170 & IND <= 290) ~ "Agriculture, forestry, fishing, and hunting", 
+    (IND >= 0370  & IND <= 0490) ~ "Mining",
+    (IND == 0770 ) ~ "Construction",
+    (IND >= 1070 & IND <= 3990) ~ "Manufacturing",
+    (IND >= 4070 & IND <= 5790) ~ "Wholesale and retail trade",
+    ((IND >= 6070 & IND <= 6390) | (IND >= 0570 & IND <= 0690)) ~ "Transportation and utilities",
+    (IND >= 6470 & IND <= 6780) ~ "Information",
+    (IND >= 6870 & IND <= 7190) ~ "Financial activities",
+    (IND >= 7270 & IND <= 7790) ~ "Professional and business services",
+    (IND >= 7860 & IND <= 8470) ~ "Educational and health services",
+    (IND >= 8560 & IND <= 8690) ~ "Leisure and hospitality",
+    (IND >= 8770 & IND <= 9290) ~ "Other services",
+    (IND >= 9370 & IND <= 9590) ~ "Public administration",
+    (IND == 9890) ~ "Armed Forces", 
+    TRUE ~ 'Other services'
+    )
+)
+```
+
+# Creating buckets for different age groups of the employees
+```{r}
+employee_data = employee_data %>% 
+  mutate(AGE = as.numeric(AGE))%>% 
+  mutate(AGE_GRP = case_when(
+    (AGE >= 0 & AGE <= 17) ~ "Under 18", 
+    (AGE >= 18 & AGE <= 24) ~ "18-24",
+    (AGE >= 25 & AGE <= 34) ~ "25-34",
+    (AGE >= 35 & AGE <= 44) ~ "35-44",
+    (AGE >= 45 & AGE <= 54) ~ "45-54",
+    TRUE ~ '55 and over'
+    )
+)
+```
+
+# Grouping different education levels into few categories
+
+```{r}
+employee_data = employee_data %>%
+  mutate(EDUC = as.character(EDUC)) %>%
+  mutate(EDUC_GRP = case_when(
+    (EDUC == "None or preschool" | EDUC == "Grades 1, 2, 3, or 4" | EDUC == "Grades 5 or 6" | 
+      EDUC == "Grades 7 or 8" | EDUC == "Grade 9" | EDUC == "Grade 10" | EDUC == "Grade 11"
+      ) ~ "Less than a high school diploma",
+    (EDUC == "High school diploma or equivalent") ~ "High school graduates",
+    (EDUC == "Some college but no degree") ~ "Some college, no degree",
+    (EDUC == "Associate's degree, occupational/vocational program" | 
+       EDUC == "Associate's degree, academic program") ~ "Associate degree",
+    (EDUC == "Bachelor's degree") ~ "Bachelor's degree",
+    (EDUC == "Professional school degree" | EDUC == "Master's degree" | EDUC == "Doctorate degree")
+      ~ "Advanced degree"
+  )
+)
+```
+
+```{r}
+# Grouping different racial groups based on the race
+employee_data = employee_data %>% 
+  mutate(RACE_GRP = case_when(
+    (RACE == 'White') ~ 'White',
+    (RACE == 'Black/Negro') ~ 'Black',
+    (RACE == 'American Indian/Aleut/Eskimo') ~ 'American Indian-Aleut-Eskimo',
+    (RACE == 'Asian only' | RACE == 'Asian or Pacific Islander'| RACE == 'Hawaiian/Pacific Islander only') ~                                'Asian-Pac-Islander', 
+    TRUE ~ 'Others'
+    )
+)
+```
+
+## Omit any null data after pre-processing
+```{r}
+employee_data = na.omit(employee_data)
+employee_data = employee_data %>%
+  select('YEAR', 'AGE_GRP', 'SEX', 'RACE_GRP', 'EDUC_GRP', 'MAJOR_IND', 'EARNWEEK', 'EARNWT', 'EMPSTAT', 'ASECWT', 'CPI99')
+colnames(employee_data)[colnames(employee_data) == 'SEX'] <- 'GENDER'
+```
+After pre-processing, we have 523452 rows of data.
+
+# 1. Change in unemployement rate over the years in various industires and their affect on income of demographic groups. 
+
+### Change in employment rate over the peroid
+
+```{r}
+# Create employed and unemployed category for each industry and year
+employee_data = employee_data %>%
+  mutate(EMPLOYED = case_when(
+    (EMPSTAT == 'At work' | EMPSTAT == 'Armed Forces' | EMPSTAT == 'Has job, not at work last week') ~ 1,
+    TRUE ~ 0
+  )
+)
+sum(employee_data$EMPLOYED == 0)/(sum(employee_data$EMPLOYED == 0) + sum(employee_data$EMPLOYED == 1))
+```
+The unemployment rate is about 5.3%, which matches with the real-time data provided by Bureau of Labor Statistics.
+
+## Compute employment percentage of each industry for the years
+```{r}
+employedPercentage = data.frame(employee_data$YEAR, employee_data$MAJOR_IND, employee_data$EMPLOYED)
+colnames(employedPercentage) = c('YEAR', 'MAJOR_IND', 'EMPLOYED')
+
+employedPercentage = employedPercentage %>%
+  group_by(MAJOR_IND, YEAR) %>%
+  summarise(employed_sum = sum(EMPLOYED == 1),
+            unemployed_sum = sum(EMPLOYED == 0))
+
+employedPercentage$percent_employed = (employedPercentage$employed_sum / 
+                                         (employedPercentage$employed_sum + employedPercentage$unemployed_sum)) * 100
+employedPercentage$percent_unemployed = (employedPercentage$unemployed_sum / 
+                                         (employedPercentage$employed_sum + employedPercentage$unemployed_sum)) * 100
+```
+```{r fig.width=16}
+ggplot(employedPercentage, aes(x = YEAR, y = percent_unemployed)) + 
+  geom_line() +
+  facet_wrap(~MAJOR_IND, ncol = 5, labeller = label_wrap_gen()) +
+  ylim(0, 15) +
+  xlim(2015, 2020) +
+  xlab("Year") + 
+  ylab("Unemployment Rate in %") + 
+  ggtitle("Unmployment Rate over the Years") + theme_g
+```
+
+Since people in Active Duty are excluded from CPS data, hence we get 0% employment rate for the Armed Forces.
+Source: https://www.bls.gov/cps/cps-veterans-faq.htm#:~:text=6.-,Are%20people%20currently%20serving%20on%20active%20duty%20in%20the%20U.S.,the%20CPS%20labor%20force%20estimates.
+
+Therefore, we remove the employment rate of Armed Forces from the data set.
+
+```{r}
+employee_data = filter(employee_data, MAJOR_IND != "Armed Forces")
+employedPercentage = filter(employedPercentage, MAJOR_IND != "Armed Forces")
+```
+
+```{r fig.width=16}
+ggplot(employedPercentage, aes(x = YEAR, y = percent_unemployed)) + 
+  geom_line() +
+  facet_wrap(~MAJOR_IND, ncol = 5, labeller = label_wrap_gen()) +
+  ylim(0, 15) +
+  xlim(2015, 2020) +
+  xlab("Year") + 
+  ylab("Unemployment Rate in %") + 
+  ggtitle("Unemployment Rate over the Years") + theme_g
+```
+
+```{r fig.width=16}
+employedPercentage = employedPercentage %>%
+  filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | MAJOR_IND == "Information" |
+           MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | MAJOR_IND == "Manufacturing" | 
+           MAJOR_IND == "Professional and business services" | MAJOR_IND == "Wholesale and retail trade")
+ggplot(employedPercentage, aes(x = YEAR, y = percent_unemployed)) + 
+  geom_line() +
+  facet_wrap(~MAJOR_IND, ncol = 4, labeller = label_wrap_gen()) +
+  ylim(0, 15) +
+  xlim(2015, 2020) +
+  xlab("Year") + 
+  ylab("Unemployment Rate in %") + 
+  ggtitle("Unemployment Rate over the Years") + theme_g
+```
+Figure 1 shows how the unemployment rate has varied over time in many main industry sectors from 2015 to 2020. In general, unemployment rates decreased from 2015 to 2020 across all sectors, except the mining and information industries, which experienced a 7% and 2% increase in unemployment rates, respectively, in 2016.
+From 2019 to 2020, every sector experienced an increase in unemployment, possibly due to the COVID-19 Pandemic, except agriculture, forestry, fishing, and hunting, which saw a decrease in unemployment. The leisure and hospitality sectors appear to have taken the brunt of the Pandemic's effects, followed by manufacturing, mining, and construction. The information, financial, and public administration sectors (the latter two not included in the graph) were allegedly unaffected by the epidemic and experienced no substantial changes in unemployment rates. 
+
+# 2. Understanding how median weekly salary is varying across various demographic variables.
+
+```{r}
+unique(employee_data[employee_data$EMPLOYED == 0,]$EARNWEEK)
+```
+
+Since 9999.99 is the EARNWEEK value set for unemployed person, we filter it out the data set where EARNWEEK = 9999.99 as we are concerned with the income of the employed people in the labor force.
+
+# Change in income over the peroid
+
+```{r}
+income_data = employee_data %>% 
+  filter(EARNWEEK != 9999.99) %>%
+  group_by(MAJOR_IND, YEAR) %>%
+  summarise(MEDIAN_INCOME = weighted.median(EARNWEEK * CPI99, EARNWT, na.rm = TRUE))
+```
+
+## Overall median income across the industries
+```{r fig.width=16}
+ggplot(income_data %>% 
+         group_by(YEAR) %>%
+         summarise(MEDIAN_INCOME = median(MEDIAN_INCOME))
+       , aes(x= YEAR, y = MEDIAN_INCOME)) + 
+  geom_line() + 
+  scale_color_discrete()+
+  xlab("Year") + 
+  ylab("Median Income($/week) ") + 
+  ggtitle("Median Income over years across all industries") +theme_g
+```
+The median income shows an increasing trend over the years. There was a significant increase in income per week from 540$/week to 600$/week from 2015 to 2017. We saw a dip in income from 2017 to 2019, but it has since been increasing. Since we saw that the unemployment rate generally increased during the pandemic and the weekly earning still increased, it could likely be that the people with low paying jobs were more likely to lose their jobs. Let's see if it's the same trend across all the industries. 
+
+## Overall median income across each industry
+```{r fig.width=16}
+ggplot(income_data %>%
+                 filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | 
+                 MAJOR_IND == "Information" | MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | 
+                 MAJOR_IND == "Manufacturing" | MAJOR_IND == "Professional and business services" | 
+                 MAJOR_IND == "Wholesale and retail trade"), aes(x= YEAR, y = MEDIAN_INCOME, fill = MAJOR_IND)) + 
+  geom_line() + 
+  facet_wrap(~MAJOR_IND, ncol = 4, labeller = label_wrap_gen())+
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median Income over years across various industries") +theme_g
+```
+Figure 2 depicts how the median income varies over time and is influenced by the unemployment rate in various labor industries.
+On EARNWT data, we use the CPI dollar value of 1999 to adjust the income per week rates for inflation, and we employ weighted mean. We accomplish this by employing the following methods: :
+          MEDIAN_INCOME = weighted.median(Weekly earning * CPI99, Earn weight)
+          
+The industry of leisure and hospitality compensates the least, followed by wholesale and retail trade.
+From 2015 to 2020, earnings per week in agriculture, forestry, fishing, and hunting, construction, manufacturing, and professional and business services are expected to rise, while information earnings peaked in 2016 but have since fallen.
+In overall, the mining business appears to be paying more, however there is a lot of fluctuation across time.
+Despite the fact that the unemployment rate increased all across the industries during the pandemic (see Figure 1), we do not detect a significant drop in median weekly earnings across industries, with the exception of the mining industry. 
+
+Furthermore, we investigate whether persons of various demographics follow the same pattern across industries through time or if one group of a certain demography is affected more than the other. 
+
+## Change in Median Income by Gender over years
+
+```{r}
+income_data_gender = employee_data %>% 
+  filter(EARNWEEK != 9999.99) %>%
+  group_by(GENDER, MAJOR_IND, YEAR) %>%
+  summarise(MEDIAN_INCOME = weighted.median(EARNWEEK * CPI99, EARNWT, na.rm = TRUE))
+```
+How does the median income of Male and Female varies over the years?
+```{r fig.width=16}
+ggplot(income_data_gender %>% 
+         group_by(YEAR, GENDER) %>%
+         summarise(MEDIAN_INCOME = median(MEDIAN_INCOME)), aes(x= YEAR, y = MEDIAN_INCOME, color = GENDER)) + 
+  geom_line() + 
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median Income over years Vs gender") + theme_g
+```
+We see a substantial wage discrepancy between males and females, with females experiencing a significant drop in income throughout the 2016-2017 year. From 2016 to 2018, there was an increase followed by a fall for Males, and the weekly income has since been increasing, while the rate of increase for Females throughout the 2019-2020 period is fairly modest. 
+
+To fully comprehend the salary disparity between men and women, a more in-depth analysis is required, one that compares salaries depending on job location, demographics, and job description. 
+
+Is the above trend is seen across all the industries?
+
+```{r fig.width=16}
+ggplot(income_data_gender %>%
+                 filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | 
+                 MAJOR_IND == "Information" | MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | 
+                 MAJOR_IND == "Manufacturing" | MAJOR_IND == "Professional and business services" | 
+                 MAJOR_IND == "Wholesale and retail trade"), aes(x= YEAR, y = MEDIAN_INCOME, color = GENDER)) + 
+  geom_line() + 
+  facet_wrap(~MAJOR_IND, ncol = 4, labeller = label_wrap_gen()) +
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years Vs gender") + theme_g
+```
+The wage gap between men and women is smaller in the agriculture, forestry, fishing, and hunting, construction, leisure and hospitality, and mining industries, but it is the largest in the information industry, followed by professional and business services, manufacturing, and wholesale and retail trade. As a result, the salary disparity isn't a consistent trend across all industries. 
+
+## Change in Median Income by Race over years
+```{r}
+income_data_race = employee_data %>% 
+  filter(EARNWEEK != 9999.99) %>% 
+  group_by(RACE_GRP, MAJOR_IND, YEAR) %>%
+  summarise(MEDIAN_INCOME = weighted.median(EARNWEEK * CPI99, EARNWT, na.rm = TRUE))
+```
+How does the median income varies for different racial groups?
+```{r fig.width=16}
+
+ggplot(income_data_race %>% 
+         group_by(YEAR, RACE_GRP) %>% 
+         summarise(MEDIAN_INCOME = median(MEDIAN_INCOME)), aes(x= YEAR, y = MEDIAN_INCOME, color = RACE_GRP)) + 
+  geom_line() + 
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years Vs racial groups") +
+  theme_g
+```
+The Asian-Pac-Islander group seems to be most earning group across all the years and see further increase in median income over the years, while the American Indian-Aleut-Eskimo group seems to be earning the least. The overall trend for all the groups sees and increase over the years, with the 'Others' seeing the most increase, while the American Indian-Aleut-Eskimo seeing the least increment.
+
+Do we see the same trend across all the industries?
+
+```{r fig.width=16}
+ggplot(income_data_race %>% 
+         filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | 
+         MAJOR_IND == "Information" | MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | 
+         MAJOR_IND == "Manufacturing" | MAJOR_IND == "Professional and business services" | 
+         MAJOR_IND == "Wholesale and retail trade"), aes(x= YEAR, y = MEDIAN_INCOME, color = RACE_GRP)) + 
+  geom_line() + 
+  facet_wrap(~MAJOR_IND, ncol = 4, labeller = label_wrap_gen())+
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years Vs racial groups across various industries") +theme_g
+```
+Asian-Pac-Islander group seems to be earning the most in Information, Manufacturing,Mining and Professional and business services industries, however, there is no significant different in other industries based on racial groups.
+
+## Change in Median Income by Age over years
+
+Under 18 age group has missing values in Construction industry and hence we remove the under 18 group from this analysis.
+```{r}
+income_data_age = employee_data %>% 
+  filter(EARNWEEK != 9999.99, AGE_GRP != "Under 18") %>%
+  group_by(AGE_GRP, MAJOR_IND, YEAR) %>%
+  summarise(MEDIAN_INCOME = weighted.median(EARNWEEK * CPI99, EARNWT, na.rm = TRUE))
+```
+```{r fig.width=16}
+ggplot(income_data_age %>% 
+         group_by(YEAR, AGE_GRP) %>% 
+         summarise(MEDIAN_INCOME = median(MEDIAN_INCOME)), aes(x= YEAR, y = MEDIAN_INCOME, color = AGE_GRP)) + 
+  geom_line() + 
+   scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years Vs age group") +theme_g
+```
+With age, the median income rises. The age group 25-34 has witnessed an increase in median income in recent years, whereas the rest of the categories have seen decreases. In the 2019-2020 year, the age groups 18-24 and 55 and over showed a considerable reduction, implying that most young and older employees lost more jobs than other age groups during the epidemic. 
+
+Do we see similar trend across all industries?
+```{r fig.width=16}
+ggplot(income_data_age %>% 
+         filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | 
+         MAJOR_IND == "Information" | MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | 
+         MAJOR_IND == "Manufacturing" | MAJOR_IND == "Professional and business services" | 
+         MAJOR_IND == "Wholesale and retail trade"), aes(x= YEAR, y = MEDIAN_INCOME, color = AGE_GRP)) + 
+  geom_line() + 
+  facet_wrap(~MAJOR_IND, ncol = 4, labeller = label_wrap_gen())+
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years Vs age groups across various industries") + theme_g
+```
+In contrast to the general trend, the 18-24 age group experienced a big salary gain in the mining industry and an increase in the information business, while they were unaffected in the Leisure and Hospitality and Wholesale and Retail trade industries.
+Wages in the information and mining industries plummeted for those aged 54 and over, while they fared better in Manufacturing, Construction, and Leisure and Hospitality. 
+
+## Change in Median Income by EDUC over years
+```{r}
+income_data_educ = employee_data %>% 
+  filter(EARNWEEK != 9999.99) %>%
+  group_by(EDUC_GRP, MAJOR_IND, YEAR) %>%
+  summarise(MEDIAN_INCOME = weighted.median(EARNWEEK * CPI99, EARNWT, na.rm = TRUE))
+```
+Does attaining higher qualification helps one earn more?
+
+```{r fig.width=16}
+ggplot(income_data_educ %>% 
+         group_by(YEAR, EDUC_GRP) %>% 
+         summarise(MEDIAN_INCOME = median(MEDIAN_INCOME)), aes(x= YEAR, y = MEDIAN_INCOME, color = EDUC_GRP)) + 
+  geom_line() + 
+   scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years Vs education") +theme_g
+```
+In general, highly qualified people earn more money than the rest of the population. People with advanced degrees, such as a Master's or a Post-Doctoral degree, earn more than those with only a Bachelor's degree. People with a high school diploma or less earn the least. In general, people with an Associate degree earn more money, but not nearly as much as those with a Bachelor's degree or another advanced degree. 
+
+Does having a higher qualification helps earn in every industry?
+```{r fig.width=16}
+ggplot(income_data_educ %>%
+         filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | 
+         MAJOR_IND == "Information" | MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | 
+         MAJOR_IND == "Manufacturing" | MAJOR_IND == "Professional and business services" | 
+         MAJOR_IND == "Wholesale and retail trade"), aes(x= YEAR, y = MEDIAN_INCOME, color = EDUC_GRP)) + 
+  geom_line() + 
+  facet_wrap(~MAJOR_IND, ncol = 4, labeller = label_wrap_gen())+
+  scale_color_manual(values = cbPalette) +
+  xlab("Year") + 
+  ylab("Median Income($/week)") + 
+  ggtitle("Median income over years vs education across various industries") +theme_g
+```
+We see that people with greater qualifications earn more in general across all industries. People with greater qualifications are likely to earn much more in manufacturing, information, mining, and professional and commercial services than people with lower qualifications, whereas the difference is not as large in other industries. In every field, persons with less than a high school graduation earn the least. 
+
+# Create a filtered dataset
+```{r}
+filtered_employee_data = filter(employee_data, EARNWEEK != 9999.99) %>%
+  filter(EARNWEEK != 9999.99) %>%
+  filter(EARNWEEK != 9999.99, AGE_GRP != "Under 18") %>%
+  filter(EARNWEEK != 9999.99) %>% 
+  filter(MAJOR_IND == "Agriculture, forestry, fishing, and hunting" | MAJOR_IND == "Construction" | 
+         MAJOR_IND == "Information" | MAJOR_IND == "Leisure and hospitality" | MAJOR_IND == "Mining" | 
+         MAJOR_IND == "Manufacturing" | MAJOR_IND == "Professional and business services" | 
+         MAJOR_IND == "Wholesale and retail trade") %>%
+  group_by(YEAR, MAJOR_IND, GENDER, AGE_GRP, EDUC_GRP, RACE_GRP) %>%
+  mutate(MEDIAN_INCOME = weighted.median(EARNWEEK * CPI99, EARNWT, na.rm = TRUE)) 
+filtered_employee_data = subset(filtered_employee_data, select = c('YEAR', 'RACE_GRP', 'EDUC_GRP', 'AGE_GRP',
+                                                              'GENDER', 'MAJOR_IND', 'ASECWT', 'MEDIAN_INCOME'))
+
+filtered_employee_data$EDUC_GRP = as.factor(filtered_employee_data$EDUC_GRP)
+filtered_employee_data$AGE_GRP = as.factor(filtered_employee_data$AGE_GRP)
+filtered_employee_data$GENDER = as.factor(filtered_employee_data$GENDER)
+filtered_employee_data$MAJOR_IND = as.factor(filtered_employee_data$MAJOR_IND)
+filtered_employee_data$RACE_GRP = as.factor(filtered_employee_data$RACE_GRP)
+```
+
+Do Females earn less than Males across each racial groups?
+```{r fig.width=16}
+temp = aggregate(filtered_employee_data$MEDIAN_INCOME, list(filtered_employee_data$GENDER, 
+                                                            filtered_employee_data$RACE_GRP,
+                                                            filtered_employee_data$YEAR), FUN=mean)
+
+colnames(temp) = c('SEX', 'RACE_GRP', 'YEAR', 'Average_median_income')
+ggplot(temp, aes(x = YEAR, y = Average_median_income)) +
+  geom_line() +
+  labs(x = 'YEAR', y = 'Average Median Income', title = 'Average median income over years based on gender and racial groups')+
+  facet_wrap(~SEX + RACE_GRP, ncol = 5, labeller = label_wrap_gen())+
+  theme_g
+```
+
+For both genders, Asian-Pacific Islanders earn more than other racial groupings. Males of a certain racial group make more than females in general; Asian-Pacific-Islander Females earn more than Males of the other four racial groups. 
+
+```{r fig.width=16}
+qplot((filtered_employee_data$MEDIAN_INCOME), geom="histogram") +  labs(y="Count", 
+       x=" Median Income") + theme_g
+```
+We found that the median income is skewed in the wrong direction. We fit a linear model to revenue after applying a log transformation to make it normally distributed. With log converted income data, we found a considerable improvement in the model. 
+# Log transform the median income
+```{r fig.width=16}
+filtered_employee_data$MEDIAN_INCOME = log(filtered_employee_data$MEDIAN_INCOME)
+```
+
+
+```{r fig.width=16}
+qplot((filtered_employee_data$MEDIAN_INCOME), geom="histogram") +
+  labs(y="Count", 
+       x="Log( Median Income )") +
+  theme_g
+```
+
+
+# 3. Fit a model to predictive median income of a person based on year, gender, race group, education group, major industry and age group
+
+# Trying to fit a lm
+```{r fig.width=16}
+income.lm = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + MAJOR_IND + AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+# Plot median income over the years
+ggplot(income.lm, aes(x = YEAR, y = MEDIAN_INCOME)) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  # geom_smooth(method = "loess", se = FALSE, method.args = list(degree = 1), color = "orange") +
+  facet_wrap(~GENDER + RACE_GRP, ncol = 5, labeller = label_wrap_gen()) +
+  ylab("Log( Median Income )") +theme_g
+
+# Plot AIC value
+AIC(income.lm)
+
+# Plot fitted vs residual plot
+income.lm.df = data.frame(filtered_employee_data,
+                             .fitted = fitted.values(income.lm),
+                             .resid = resid(income.lm))
+ggplot(income.lm.df, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  ylim(-2, 2) +
+  theme_g +
+  ggtitle("Fitted vs Residuals plot of linear model without interactions")
+```
+We can see from the above log(median income) vs year plot that median income has been increasing over time for each race group for both genders. The residual plot is a straight line going through the x-axis, with a small increasing trend towards the right, and the AIC value is 30511.6. The residuals are roughly evenly distributed as well, however the bottom right half of the plot has a few more points than the top right half. By introducing interactions between the predictors, we hope to improve the model. 
+
+# 4. Does interactions improves the model.
+
+### Check if Major Industry and Race Group interact
+```{r fig.height=15, fig.width = 20}
+# Model without interaction
+income.race_MajorIND.lm = lm(MEDIAN_INCOME ~ YEAR + MAJOR_IND + RACE_GRP, weights = ASECWT,
+                    data=filtered_employee_data)
+# Model with interaction with race
+income.race_MajorIND.lm.ir = lm(MEDIAN_INCOME ~ YEAR + MAJOR_IND * RACE_GRP, weights = ASECWT,
+                      data=filtered_employee_data)
+
+income.race_MajorIND.df = expand.grid(RACE_GRP = c("American Indian-Aleut-Eskimo", "Asian-Pac-Islander", "Black", "Others", "White"), MAJOR_IND = levels(filtered_employee_data$MAJOR_IND), YEAR = c(2015, 2016, 2017, 2018, 2019, 2020))
+# Predict without interaction
+income.race_MajorIND.pred = predict(income.race_MajorIND.lm, type="response", newdata = income.race_MajorIND.df)
+income.race_MajorIND.pred.df = data.frame(income.race_MajorIND.df, pred = as.vector(income.race_MajorIND.pred))
+# Prediction with interaction
+income.race_MajorIND.pred.ir = predict(income.race_MajorIND.lm.ir, type="response", newdata = income.race_MajorIND.df)
+income.race_MajorIND.pred.ir.df = data.frame(income.race_MajorIND.df, pred = as.vector(income.race_MajorIND.pred.ir))
+# Plot the models with interactions and no interaction
+ggplot(income.race_MajorIND.pred.df, aes(x = YEAR, y = pred)) +
+  geom_line(aes(color = "No Interaction")) +
+  geom_line(data = income.race_MajorIND.pred.ir.df, aes(color = c("With Interaction"))) +
+  facet_wrap(~RACE_GRP + MAJOR_IND, labeller = label_wrap_gen())+
+  theme_g+
+  scale_color_manual(values=c("No Interaction" = "navyblue", "With Interaction" = "orange")) +
+  labs(title="Log(Median Income) of each racial group across various industires", 
+       x="Year", 
+       y="Log( Median Income )")
+```
+From the above plot, we see that Major Industry and Race does have an interaction and adding it to our model should be helpful.
+
+### Check if Major Industry and Gender interact
+```{r fig.height=8,fig.width = 16}
+# Model without interaction
+income.gender_MajorIND.lm = lm(MEDIAN_INCOME ~ YEAR + MAJOR_IND + GENDER, weights = ASECWT,
+                    data=filtered_employee_data)
+# Model with interaction with gender
+income.gender_MajorIND.lm.ir = lm(MEDIAN_INCOME ~ YEAR + MAJOR_IND * GENDER, weights = ASECWT,
+                      data=filtered_employee_data)
+
+income.gender_MajorIND.df = expand.grid(GENDER = c("Female", "Male"), MAJOR_IND = levels(filtered_employee_data$MAJOR_IND), YEAR = c(2015, 2016, 2017, 2018, 2019, 2020))
+# Predict without interaction
+income.gender_MajorIND.pred = predict(income.gender_MajorIND.lm, type="response", newdata = income.gender_MajorIND.df)
+income.gender_MajorIND.pred.df = data.frame(income.gender_MajorIND.df, pred = as.vector(income.gender_MajorIND.pred))
+# Prediction with interaction
+income.gender_MajorIND.pred.ir = predict(income.gender_MajorIND.lm.ir, type="response", newdata = income.gender_MajorIND.df)
+income.gender_MajorIND.pred.ir.df = data.frame(income.gender_MajorIND.df, pred = as.vector(income.gender_MajorIND.pred.ir))
+# Plot the models with interactions and no interaction
+ggplot(income.gender_MajorIND.pred.df, aes(x = YEAR, y = pred)) +
+  geom_line(aes(color = "No Interaction")) +
+  geom_line(data = income.gender_MajorIND.pred.ir.df, aes(color = c("With Interaction"))) +
+  facet_wrap(~GENDER + MAJOR_IND, labeller = label_wrap_gen()) +
+  # theme(panel.grid.major = element_line(color = "grey80"), panel.grid.minor = element_line(color = "grey80")) +
+  scale_color_manual(values=c("No Interaction" = "navyblue", "With Interaction" = "orange")) +
+  labs(title="Log(Median Income) of each gender with various industires over the years", 
+       x="Year", 
+       y="Log( Median Income )") +theme_g
+```
+There is a significant interaction between gender and major industry, and hence we will add this to our model.
+
+### Check if Age Groups and Gender intracts
+```{r fig.height=8,fig.width = 16}
+# Model without interaction
+income.age_gender.lm = lm(MEDIAN_INCOME ~ YEAR + AGE_GRP + GENDER, weights = ASECWT,
+                    data=filtered_employee_data)
+# Model with interaction with age group
+income.age_gender.lm.ir = lm(MEDIAN_INCOME ~ YEAR + AGE_GRP * GENDER, weights = ASECWT,
+                      data=filtered_employee_data)
+
+income.age_gender.df = expand.grid(GENDER = c("Female", "Male"), AGE_GRP = levels(filtered_employee_data$AGE_GRP), YEAR = c(2015, 2016, 2017, 2018, 2019, 2020))
+# Predict without interaction
+income.age_gender.pred = predict(income.age_gender.lm, type="response", newdata = income.age_gender.df)
+income.age_gender.pred.df = data.frame(income.age_gender.df, pred = as.vector(income.age_gender.pred))
+# Prediction with interaction
+income.age_gender.pred.ir = predict(income.age_gender.lm.ir, type="response", newdata = income.age_gender.df)
+income.age_gender.pred.ir.df = data.frame(income.age_gender.df, pred = as.vector(income.age_gender.pred.ir))
+# Plot the models with interactions and no interaction
+ggplot(income.age_gender.pred.df, aes(x = YEAR, y = pred)) +
+  geom_line(aes(color = "No Interaction")) +
+  geom_line(data = income.age_gender.pred.ir.df, aes(color = c("With Interaction"))) +
+  facet_wrap(~GENDER + AGE_GRP, labeller = label_wrap_gen()) + 
+  scale_color_manual(values=c("No Interaction" = "navyblue", "With Interaction" = "orange")) +
+  labs(title="Log(Median Income) of each gender and age group over the years", 
+       x="Year", 
+       y="Log( Median Income )")+theme_g
+```
+Gender and age group do interact and hence should be beneficial to consider this in our model.
+
+### Check if Age groups and Education Groups interacts
+```{r fig.height=10,fig.width = 16}
+# Model without interaction
+income.age_educ.lm = lm(MEDIAN_INCOME ~ YEAR + AGE_GRP + EDUC_GRP, weights = ASECWT,
+                    data=filtered_employee_data)
+# Model with interaction with age group
+income.age_educ.lm.ir = lm(MEDIAN_INCOME ~ YEAR + AGE_GRP * EDUC_GRP, weights = ASECWT,
+                      data=filtered_employee_data)
+
+income.age_educ.df = expand.grid(EDUC_GRP = levels(filtered_employee_data$EDUC_GRP), AGE_GRP = levels(filtered_employee_data$AGE_GRP), YEAR = c(2015, 2016, 2017, 2018, 2019, 2020))
+# Predict without interaction
+income.age_educ.pred = predict(income.age_educ.lm, type="response", newdata = income.age_educ.df)
+income.age_educ.pred.df = data.frame(income.age_educ.df, pred = as.vector(income.age_educ.pred))
+# Prediction with interaction
+income.age_educ.pred.ir = predict(income.age_educ.lm.ir, type="response", newdata = income.age_educ.df)
+income.age_educ.pred.ir.df = data.frame(income.age_educ.df, pred = as.vector(income.age_educ.pred.ir))
+# Plot the models with interactions and no interaction
+ggplot(income.age_educ.pred.df, aes(x = YEAR, y = pred)) +
+  geom_line(aes(color = "No Interaction")) +
+  geom_line(data = income.age_educ.pred.ir.df, aes(color = c("With Interaction"))) +
+  facet_wrap(~AGE_GRP + EDUC_GRP, labeller = label_wrap_gen()) + 
+  scale_color_manual(values=c("No Interaction" = "navyblue", "With Interaction" = "orange")) +
+  labs(title="Log(Median Income) of each race group by age group over the years", 
+       x="Year", 
+       y="Log( Median Income )") + theme_g
+```
+Age group and education level also interacts and hence we could add it to our model.
+
+Now we could create new linear models with interactions and verify if the model is a better fit.
+```{r}
+income.lm2 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + MAJOR_IND + AGE_GRP + AGE_GRP:GENDER, data = filtered_employee_data, weights = ASECWT)
+
+income.lm3 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + AGE_GRP + AGE_GRP:GENDER + EDUC_GRP:AGE_GRP + MAJOR_IND:GENDER + RACE_GRP:AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+income.lm4 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + AGE_GRP + AGE_GRP:GENDER + EDUC_GRP:AGE_GRP + MAJOR_IND:GENDER + MAJOR_IND:RACE_GRP + RACE_GRP:AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+income.lm5 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + AGE_GRP + AGE_GRP:GENDER + MAJOR_IND:GENDER + MAJOR_IND:RACE_GRP + RACE_GRP:AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+income.lm6 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + AGE_GRP + AGE_GRP:GENDER + EDUC_GRP:AGE_GRP + MAJOR_IND:AGE_GRP + MAJOR_IND:GENDER + MAJOR_IND:RACE_GRP + RACE_GRP:AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+income.lm7 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + AGE_GRP + AGE_GRP:GENDER + EDUC_GRP:AGE_GRP + MAJOR_IND:EDUC_GRP + MAJOR_IND:AGE_GRP + MAJOR_IND:GENDER + MAJOR_IND:RACE_GRP + RACE_GRP:AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+# Best Model!
+income.lm8 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + MAJOR_IND + AGE_GRP + MAJOR_IND:GENDER + 
+                  MAJOR_IND:RACE_GRP + MAJOR_IND:AGE_GRP + MAJOR_IND:EDUC_GRP + AGE_GRP:RACE_GRP + AGE_GRP:GENDER,
+                data = filtered_employee_data, weights = ASECWT)
+
+AIC(income.lm2)
+AIC(income.lm3)
+AIC(income.lm4)
+AIC(income.lm5)
+AIC(income.lm6)
+AIC(income.lm7)
+AIC(income.lm8)
+```
+```{r fig.width = 16}
+income.lm8.df = data.frame(filtered_employee_data,
+                             .fitted = fitted.values(income.lm8),
+                             .resid = resid(income.lm8))
+
+# Plot the residual plots
+ggplot(income.lm8.df, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  ylim(-2, 2) +theme_g+
+  ggtitle(".Fitted vs Residuals plot of linear model with interactions")
+
+
+# Plot median income over the years
+ggplot(income.lm8, aes(x = YEAR, y = MEDIAN_INCOME)) + 
+  geom_smooth(method = "lm", se = FALSE) +
+   labs(title="Log(Median Income) of each race group by gender group over the years", 
+       x="Year", 
+       y="Log( Median Income )")+
+  facet_wrap(~GENDER + RACE_GRP, ncol = 5, labeller = label_wrap_gen()) +theme_g
+```
+Meaningful interactions does improves our model. We saw major industry does interacts with gender, age group, race group, education level and in our analysis, we also noticed interactions between age group with race group and gender. By adding these meaningful interactions to our model, we saw the AIC value reduced to 24114.14, which is much better than the model without interaction having an AIC value of 30511.6. Comparing the residual plots, the residual plot of the model with interaction leads to a smoother with a straight line about the x-axis with no bends, and the residuals are distributed evenly, suggesting that our model fits the data well.  
+
+### Does adding 3 way interaction improved the model?
+```{r}
+income.lm9 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + MAJOR_IND + AGE_GRP + AGE_GRP:GENDER:MAJOR_IND:RACE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+income.lm10 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + MAJOR_IND + AGE_GRP + GENDER:EDUC_GRP:AGE_GRP + MAJOR_IND:EDUC_GRP:GENDER + MAJOR_IND:AGE_GRP:GENDER + MAJOR_IND:RACE_GRP:GENDER + RACE_GRP:AGE_GRP:GENDER + GENDER:EDUC_GRP:RACE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+income.lm11 = lm(MEDIAN_INCOME ~ GENDER + YEAR + RACE_GRP + EDUC_GRP + MAJOR_IND + AGE_GRP + MAJOR_IND:RACE_GRP:AGE_GRP +
+                   MAJOR_IND:AGE_GRP:GENDER:EDUC_GRP + RACE_GRP:GENDER:AGE_GRP, data = filtered_employee_data, weights = ASECWT)
+
+AIC(income.lm9)
+AIC(income.lm10)
+AIC(income.lm11)
+```
+
+```{r fig.width=16}
+income.lm11.df = data.frame(filtered_employee_data,
+                             .fitted = fitted.values(income.lm11),
+                             .resid = resid(income.lm11))
+
+# Plot the residual plots
+ggplot(income.lm11.df, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  ylim(-2, 2) +theme_g+
+  ggtitle(".Fitted vs Residuals plot of 3 way Interaction model")
+
+# Plot median income over the years
+ggplot(income.lm11, aes(x = YEAR, y = MEDIAN_INCOME)) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  facet_wrap(~GENDER + RACE_GRP, ncol = 5, labeller = label_wrap_gen()) +
+  labs(title="Log(Median Income) of each race group by gender group over the years", 
+       x="Year", 
+       y="Log( Median Income )")+
+  theme_g
+```
+The AIC value does decreases when we add 3 way interactions however, from the residual plot, we see that the model is rather over fitting the data which is evident from the downwards bent of the smoother in the residual plot. Hence, adding 3 way interactions over fits the model with our data and shouldn't be used.
+
+# Predict on the lm model
+```{r fig.width=16}
+# Predict with the model
+income.lm8.grid =  expand.grid(YEAR = c(2015, 2016, 2017, 2018, 2019, 2020), 
+                               MAJOR_IND = levels(filtered_employee_data$MAJOR_IND), 
+                               AGE_GRP = levels(filtered_employee_data$AGE_GRP), 
+                               GENDER = c("Female", "Male"), 
+                               RACE_GRP=c("American Indian-Aleut-Eskimo", "Asian-Pac-Islander", "Black", "Others", "White"),
+                               EDUC_GRP = levels(filtered_employee_data$EDUC_GRP))
+
+income.lm8.pred = predict(income.lm8, newdata = income.lm8.grid, type = "response")
+income.lm8.pred.df = data.frame(income.lm8.grid, income.prob = as.vector(income.lm8.pred))
+
+# Plot the model
+ggplot(income.lm8.pred.df, aes(x = YEAR, y = income.prob, group = MAJOR_IND, color = MAJOR_IND)) +
+  geom_line() +
+  facet_grid(EDUC_GRP + AGE_GRP ~ RACE_GRP + GENDER, labeller = label_both) +
+  theme_g
+```
+
+```{r}
+#library(GGally)
+#subset(filtered_employee_data, select = -c(YEAR)) %>%
+  #ggpairs(filtered_employee_data)
+```
+
+```{r fig.height = 20, fig.width=35}
+# Predict with the model
+income.lm8.grid$YEAR = as.factor(income.lm8.grid$YEAR)
+income.lm8.grid =  expand.grid(YEAR = c( 2018, 2019, 2020), 
+                               MAJOR_IND = c("Agriculture, forestry, fishing, and hunting"
+                                             ,"Mining","Professional and business services", "Information"), 
+                               AGE_GRP = c("25-34","35-44","45-54" ), 
+                               GENDER = c("Female", "Male"), 
+                               RACE_GRP=c("Asian-Pac-Islander", "Black", "White"),
+                               EDUC_GRP = c("Advanced degree",  "Bachelor's degree" ))
+
+income.lm8.pred = predict(income.lm8, newdata = income.lm8.grid, type = "response")
+income.lm8.pred.df = data.frame(income.lm8.grid, income.prob = as.vector(income.lm8.pred))
+
+# Plot the model
+ggplot(income.lm8.pred.df, aes(x = YEAR, y = expm1(income.prob), group = MAJOR_IND, color = MAJOR_IND)) +
+  geom_line( size = 2) +
+   scale_x_continuous(breaks = 2018:2020) +
+  labs(y = "Predicted Median Income", x = "YEAR", title = "Median Income Prediction based on Demographic For 2018-2020")+
+  facet_grid(EDUC_GRP + AGE_GRP ~ RACE_GRP + GENDER,  labeller = label_wrap_gen())+
+  scale_color_manual(values = cbPalette) +
+  theme(panel.grid.major = element_line(color = "lightgrey"), panel.grid.minor = element_line(color = "lightgrey"),
+        panel.background = element_rect(fill = 'white', color = 'black'),
+                strip.text.x = element_text(size = 23, face = "bold"),
+        strip.text.y = element_text(size = 23, face = "bold"), 
+        axis.title.x = element_text(size = 30, face = "bold"),
+        axis.title.y = element_text(size = 30, face = "bold"),
+legend.title = element_text(size = 25, face = "bold"),
+  legend.text = element_text(size = 23, face = "bold"),
+        plot.title = element_text(color="black", size=35, face="bold",hjust = 0.5),
+        axis.text.y =element_text(size=27, face = "bold"),
+axis.text.x =element_text(size=24, face = "bold"), 
+panel.spacing = unit(2, "lines"))
+```
+
+```{r fig.height = 20, fig.width=35}
+# Predict with the model
+income.lm8.grid$YEAR = as.factor(income.lm8.grid$YEAR)
+income.lm8.grid =  expand.grid(YEAR = c( 2018, 2019, 2020), 
+                               MAJOR_IND = c("Agriculture, forestry, fishing, and hunting"
+                                             ,"Mining","Professional and business services", "Information"), 
+                               AGE_GRP = c("25-34","35-44","45-54" ), 
+                               GENDER = c("Female", "Male"), 
+                               RACE_GRP=c("Asian-Pac-Islander", "Black", "White"),
+                               EDUC_GRP = c("Advanced degree",  "Bachelor's degree" ))
+
+income.lm8.pred = predict(income.lm8, newdata = income.lm8.grid, type = "response")
+income.lm8.pred.df = data.frame(income.lm8.grid, income.prob = as.vector(income.lm8.pred))
+```
+
+```{r}
+unique(filtered_employee_data$MAJOR_IND)
+```
+```{r fig.width=16, fig.height=9}
+# Predict with the model
+income.lm8.grid$YEAR = as.factor(income.lm8.grid$YEAR)
+income.lm8.grid =  expand.grid(YEAR = c(2015, 2016, 2017, 2018, 2019, 2020), 
+                               MAJOR_IND = unique(filtered_employee_data$MAJOR_IND), 
+                               AGE_GRP = unique(filtered_employee_data$AGE_GRP), 
+                               GENDER = c("Female", "Male"), 
+                               RACE_GRP=c("American Indian-Aleut-Eskimo", "Asian-Pac-Islander", "Black", "Others", "White"),
+                               EDUC_GRP = unique(filtered_employee_data$EDUC_GRP))
+
+income.lm8.pred = predict(income.lm8, newdata = income.lm8.grid, type = "response")
+income.lm8.pred.df = data.frame(income.lm8.grid, income.prob = as.vector(income.lm8.pred))
+
+# Plot the model
+new_data = income.lm8.pred.df %>%
+  group_by(YEAR, GENDER, MAJOR_IND) %>%
+  summarize(avgMedianIncome = mean(income.prob))
+  
+ggplot(new_data, aes(x = YEAR, y = expm1(avgMedianIncome), group = MAJOR_IND, color = MAJOR_IND)) +
+  geom_line( size = 2) +
+  facet_grid(~GENDER) + 
+  scale_x_continuous(breaks = 2015:2020) +
+  labs(y = "Predicted Median Income", x = "YEAR", title = "Median Income Prediction based on gender For 2015-2020")+
+  facet_grid(~ GENDER) +
+  scale_color_manual(values = cbPalette) +
+  theme(panel.grid.major = element_line(color = "lightgrey"), panel.grid.minor = element_line(color = "lightgrey"),
+        panel.background = element_rect(fill = 'white', color = 'black'),
+        strip.text.x = element_text(size = 20, face = "bold"),
+        strip.text.y = element_text(size = 20, face = "bold"), 
+        axis.title.x = element_text(size = 18, face = "bold"),
+        axis.title.y = element_text(size = 18, face = "bold"),
+        legend.title = element_text(size = 18, face = "bold"),
+        legend.text = element_text(size = 18, face = "bold"),
+        plot.title = element_text(color="black", size=18, face="bold",hjust = 0.5),
+        axis.text.y =element_text(size=18, face = "bold"),
+        axis.text.x =element_text(size=18, face = "bold"),
+        panel.spacing = unit(2, "lines"))
+```
+
+
+```{r}
+# Save model summary to a text file
+sink("lm.txt")
+print(summary(income.lm8))
+sink()
+```
